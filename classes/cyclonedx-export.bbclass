@@ -517,6 +517,13 @@ def resolve_dependency_ref(depends, bom_ref_map, alias_map):
     # Return None if no solution found
     return None
 
+def split_vendor_product(s: str):
+    if ":" in s:
+        vendor, product = s.split(":", 1)
+    else:
+        vendor, product = "", s
+    return vendor, product
+
 def generate_packages_list(d, products_names, version):
     """
     Get a list of products and generate CPE and PURL identifiers for each of them.
@@ -533,31 +540,50 @@ def generate_packages_list(d, products_names, version):
     if not version or version.strip() == "":
         version = "unknown"
 
-    # some packages have alternative names, so we split CVE_PRODUCT
-    # convert to set to avoid duplicates
-    for product in set(products_names.split()):
-        # CVE_PRODUCT in recipes may include vendor information for CPE identifiers. If not,
-        # use wildcard for vendor.
-        if ":" in product:
-            vendor, product = product.split(":", 1)
-        else:
-            vendor = ""
+    # Split product names and remove duplicates while preserving order
+    products = []
+    [products.append(p) for p in products_names.split() if p not in products]
 
-        spdx_purls = (d.getVar("SPDX_PACKAGE_URLS") or "").split()
-        purl = spdx_purls[0] if spdx_purls else get_base_purl(d)
+    if not products:
+        return []
 
-        pkg = {
-            "name": product,
-            "version": version,
-            "type": "library",
-            "cpe": 'cpe:2.3:*:{}:{}:{}:*:*:*:*:*:*:*'.format(vendor or "*", product, version),
-            "purl": purl,
-            "bom-ref": str(uuid.uuid4())
-        }
-        if vendor != "":
-            pkg["group"] = vendor
-        packages.append(pkg)
-    return packages
+    # --- Parse the main product (first entry) ---
+    main_raw = products[0]
+    main_vendor, main_product = split_vendor_product(main_raw)
+
+    spdx_purls = (d.getVar("SPDX_PACKAGE_URLS") or "").split()
+    purl = spdx_purls[0] if spdx_purls else get_base_purl(d)
+
+    # Build main component
+    main_pkg = {
+        "name": main_product,
+        "version": version,
+        "type": "library",
+        "cpe": f'cpe:2.3:*:{main_vendor or "*"}:{main_product}:{version}:*:*:*:*:*:*:*',
+        "purl": purl,
+        "bom-ref": str(uuid.uuid4()),
+        "externalReferences": [],
+        "properties" : [
+            {
+                "name": "cve_product",
+                "value": products_names
+            }
+        ]
+    }
+
+    if main_vendor:
+        main_pkg["group"] = main_vendor
+
+    # --- Add aliases as externalReferences ---
+    for alias_raw in products[1:]:
+        vendor, product = split_vendor_product(alias_raw)
+        main_pkg["externalReferences"].append({
+            "type": "other",
+            "url": f'cpe:2.3:*:{vendor or "*"}:{product}:{version}:*:*:*:*:*:*:*',
+            "comment": f"Alias for {main_product}"
+        })
+
+    return [main_pkg]
 
 def normalize_cve_id(cve_id):
     """
