@@ -703,6 +703,32 @@ def list_runtime_recipes_from_depends(d, depends):
             runtime_recipes.add(recipe)
     return runtime_recipes
 
+def is_duplicate_component(new_component, existing_components):
+    """
+    Check if a component already exists in the list.
+    Handles missing fields gracefully.
+    """
+    # Try to match by CPE first
+    if "cpe" in new_component:
+        for existing in existing_components:
+            if existing.get("cpe") == new_component["cpe"]:
+                return True
+
+    # Try to match by PURL
+    if "purl" in new_component:
+        for existing in existing_components:
+            if existing.get("purl") == new_component["purl"]:
+                return True
+
+    # Try to match by name + version
+    if "name" in new_component and "version" in new_component:
+        for existing in existing_components:
+            if (existing.get("name") == new_component["name"] and
+                existing.get("version") == new_component["version"]):
+                return True
+
+    return False
+
 def export_cyclonedx(d):
     """
     Select CVE and package information and runtime packages and output them
@@ -854,7 +880,8 @@ def export_cyclonedx(d):
 
         for pn_pkg in pn_list["pkgs"]:
             # Avoid multiple pkgs referencing the same cpe
-            if any(sbom_pkg["cpe"] == pn_pkg["cpe"] for sbom_pkg in sbom["components"]):
+            if is_duplicate_component(pn_pkg, sbom["components"]):
+                bb.debug(2, f"Skipping duplicate component: {pn_pkg.get('name', 'unknown')}")
                 continue
 
             # Add scope field to indicate runtime vs build-time component
