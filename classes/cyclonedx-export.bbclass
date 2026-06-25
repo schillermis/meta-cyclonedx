@@ -699,11 +699,23 @@ def export_cyclonedx(d):
 
     cyclonedx_buildtime_dir = d.getVar("CYCLONEDX_BUILDTIME_DIR")
 
+    image_name = d.getVar("IMAGE_NAME")
+    image_version = d.getVar("IMAGE_VERSION") or d.getVar("DISTRO_VERSION")
+    image_type = d.getVar("IMAGE_TYPE") or "firmware"
+    image_vendor = d.getVar("IMAGE_VENDOR") or "unknown"
+
     # Generate sbom document header
     bb.debug(2, f"Creating empty temporary sbom file with serial number {sbom_serial_number}")
     sbom_metadata = {
         "timestamp": timestamp,
-        "tools": create_tools_metadata(d)
+        "tools": create_tools_metadata(d),
+        "component":  {
+            "type" : image_type,
+            "bom-ref" : image_name,
+            "publisher" : image_vendor,
+            "name" : image_name,
+            "version" : image_version
+        }
     }
     add_metadata_extensions(d, sbom_metadata)
 
@@ -721,7 +733,14 @@ def export_cyclonedx(d):
     bb.debug(2, f"Creating empty temporary vex file with serial number {sbom_serial_number}")
     vex_metadata = {
         "timestamp": timestamp,
-        "tools": create_tools_metadata(d)
+        "tools": create_tools_metadata(d),
+        "component":  {
+            "type" : image_type,
+            "bom-ref" : image_name,
+            "publisher" : image_vendor,
+            "name" : image_name,
+            "version" : image_version
+        }
     }
     add_metadata_extensions(d, vex_metadata)
 
@@ -870,6 +889,8 @@ def export_cyclonedx(d):
                 if updated_entry not in sbom["dependencies"]:
                     sbom["dependencies"].append(updated_entry)
 
+    add_missing_root_dependencies(d, sbom)
+
     # Replace SBOM serial placeholder in VEX vulnerabilities
     # This must be done after all vulnerabilities are collected to ensure each image
     # gets its own SBOM serial number in multi-output builds (e.g., rootfs + initramfs)
@@ -914,6 +935,34 @@ def export_cyclonedx(d):
             os.symlink(target, link_name)
     make_deploy_symlink(export_sbom, get_cyclonedx_export_path("CYCLONEDX_EXPORT_SBOM_LINK"))
     make_deploy_symlink(export_vex, get_cyclonedx_export_path("CYCLONEDX_EXPORT_VEX_LINK"))
+
+def add_missing_root_dependencies(d, sbom):
+    """
+    Checks all components for dependencies. If a component is not referenced by any dependsOn,
+    a dependency element it will be added to the dependsOn of the root element
+    """
+
+    image_name = d.getVar("IMAGE_NAME")
+    bom_ref_list = []
+
+    if "components" in sbom:
+        for component in sbom["components"]:
+            if "bom-ref" in component:
+                bom_ref_list.append(component["bom-ref"])
+            else:
+                bb.warn(f"Component has no bom-ref {component}")
+
+    if "dependencies" in sbom:
+        for dependency in sbom["dependencies"]:
+            if "dependsOn" in dependency:
+                for depends in dependency["dependsOn"]:
+                    if depends in bom_ref_list:
+                        bom_ref_list.remove(depends)
+
+    # If there are components that have no dependencies d
+    if bom_ref_list:
+        dep = {"ref": image_name, "dependsOn": bom_ref_list}
+        sbom["dependencies"].append(dep)
 
 python do_export_cyclonedx() {
     export_cyclonedx(d)
